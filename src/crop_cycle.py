@@ -20,7 +20,7 @@ import logging
 # Third-party
 import numpy as np
 import pandas as pd
-from scipy.signal import argrelmax, argrelmin
+from scipy.signal import find_peaks
 from statsmodels.tsa.filters.hp_filter import hpfilter
 
 # Local
@@ -235,10 +235,15 @@ def check_trough_validity(
 def validate_peaks_and_troughs(
     ndvi_series: pd.Series,
     date_series: pd.Series,
-    min_ndvi_for_peak: float = 0.5,
+    min_ndvi_for_peak: float = 0.4,
+    peak_prominence: float = 0.1,
 ) -> pd.DataFrame:
     """
     Identify and validate all local peaks and troughs in an NDVI series.
+
+    Peaks and troughs are found by prominence (how far each one rises above,
+    or dips below, its neighbouring extrema), so a weak season is judged
+    against its own troughs rather than against the strongest seasons.
 
     Parameters
     ----------
@@ -247,15 +252,17 @@ def validate_peaks_and_troughs(
     date_series : pd.Series
         Corresponding dates.
     min_ndvi_for_peak : float, optional
-        Minimum NDVI for a valid peak. Default 0.5.
+        Minimum NDVI for a valid peak. Default 0.4.
+    peak_prominence : float, optional
+        Minimum NDVI prominence for a peak or trough. Default 0.1.
 
     Returns
     -------
     pd.DataFrame
         Columns: ``NDVI``, ``date``, ``DOY``, ``type`` (``'peak'`` or ``'trough'``).
     """
-    peaks_idx = argrelmax(ndvi_series.values, order=5)[0]
-    troughs_idx = argrelmin(ndvi_series.values, order=5)[0]
+    peaks_idx, _ = find_peaks(ndvi_series.values, prominence=peak_prominence)
+    troughs_idx, _ = find_peaks(-ndvi_series.values, prominence=peak_prominence)
 
     peaks_rows = [
         check_peak_validity(ndvi_series[p], date_series[p], min_ndvi_for_peak)
@@ -281,7 +288,8 @@ def validate_peaks_and_troughs(
 def detect_peaks_n_troughs(
     ndvi_series: pd.Series,
     dates_series: pd.Series,
-    min_ndvi_for_peak: float = 0.5,
+    min_ndvi_for_peak: float = 0.4,
+    peak_prominence: float = 0.1,
 ) -> pd.DataFrame:
     """
     Thin wrapper around ``validate_peaks_and_troughs`` with error handling.
@@ -293,7 +301,9 @@ def detect_peaks_n_troughs(
     dates_series : pd.Series
         Corresponding dates.
     min_ndvi_for_peak : float, optional
-        Minimum NDVI for a valid peak. Default 0.5.
+        Minimum NDVI for a valid peak. Default 0.4.
+    peak_prominence : float, optional
+        Minimum NDVI prominence for a peak or trough. Default 0.1.
 
     Returns
     -------
@@ -302,7 +312,7 @@ def detect_peaks_n_troughs(
         Empty DataFrame on error or if no valid extrema are found.
     """
     try:
-        pt = validate_peaks_and_troughs(ndvi_series, dates_series, min_ndvi_for_peak)
+        pt = validate_peaks_and_troughs(ndvi_series, dates_series, min_ndvi_for_peak, peak_prominence)
         if not pt.empty:
             pt["date"] = pd.to_datetime(pt["date"])
         return pt
@@ -629,9 +639,8 @@ def crop_cycle_model(
     ndvi_threshold_for_approx_season_start: float = 0.35,
     ndvi_threshold_for_approx_season_end: float = 0.4,
     min_season_length: int = 60,
-    min_ndvi_for_peak: float = None,
-    ndvi_peak_percentile: float = 90.0,
-    ndvi_peak_threshold_ceiling: float = 0.7,
+    min_ndvi_for_peak: float = 0.4,
+    peak_prominence: float = 0.1,
     season_start_pct_of_peak: float = 0.35,
     season_end_pct_of_peak: float = 0.35,
     season_window_days: int = 90,
@@ -665,14 +674,11 @@ def crop_cycle_model(
         Minimum season length (days). Shorter seasons are dropped unless
         their length is NaN (incomplete seasons). Default 60.
     min_ndvi_for_peak : float, optional
-        Hard peak NDVI threshold. Default ``None``, meaning an adaptive
-        threshold derived from ``ndvi_peak_percentile`` is used instead.
-    ndvi_peak_percentile : float, optional
-        Percentile of the smoothed series used as the adaptive peak
-        threshold (clipped to ``[0.5, ndvi_peak_threshold_ceiling]``).
-        Default 90.
-    ndvi_peak_threshold_ceiling : float, optional
-        Upper clip for the adaptive peak threshold. Default 0.7.
+        Minimum NDVI for a valid peak, a floor that rejects bare-soil or
+        weed bumps. Default 0.4.
+    peak_prominence : float, optional
+        Minimum NDVI prominence for a peak or trough. Wobbles smaller than
+        this neither create a season nor split one. Default 0.1.
     season_start_pct_of_peak : float, optional
         Fraction of peak NDVI used as adaptive season-start threshold.
         Default 0.35.
@@ -747,21 +753,11 @@ def crop_cycle_model(
 
     ndvi_proc.reset_index(inplace=True)
 
-    # --- Adaptive peak threshold ---
-    if min_ndvi_for_peak is not None:
-        effective_peak_threshold = min_ndvi_for_peak
-    else:
-        p_ndvi = float(np.percentile(ndvi_proc["NDVI_interpolated"], ndvi_peak_percentile))
-        effective_peak_threshold = float(np.clip(p_ndvi, 0.5, ndvi_peak_threshold_ceiling))
-        logger.info(
-            f"Adaptive peak threshold for {poly_name}: {effective_peak_threshold:.3f} "
-            f"(p{ndvi_peak_percentile:.0f}={p_ndvi:.3f})"
-        )
-
     p_t = detect_peaks_n_troughs(
         ndvi_proc["NDVI_interpolated"],
         ndvi_proc["date"],
-        min_ndvi_for_peak=effective_peak_threshold,
+        min_ndvi_for_peak=min_ndvi_for_peak,
+        peak_prominence=peak_prominence,
     )
 
     if p_t.empty or not {"peak", "trough"} <= set(p_t["type"]):

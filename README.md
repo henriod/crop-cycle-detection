@@ -17,7 +17,7 @@ The model takes a DataFrame with ``date`` and ``NDVI`` columns and:
 1. Removes cloud-related outliers and downward spikes using locally weighted regression.
 2. Resamples to daily frequency and gap-fills with PCHIP interpolation.
 3. Smooths the daily series with a Whittaker filter.
-4. Detects NDVI peaks and troughs to define trough-to-trough growing seasons.
+4. Detects NDVI peaks and troughs by prominence to define trough-to-trough growing seasons, so a weak (e.g. drought) season is judged against its own troughs, not against the strongest seasons in the series.
 5. Estimates green-up date, approximate season start/end, and peak NDVI date for each detected season.
 
 ## Inputs
@@ -103,9 +103,8 @@ All thresholds are configurable via keyword arguments to ``crop_cycle_model``.
 | ``ndvi_threshold_for_approx_season_start`` | 0.35 | Fallback NDVI level for season start, used if the adaptive threshold (``season_start_pct_of_peak``) never crosses |
 | ``ndvi_threshold_for_approx_season_end`` | 0.40 | Fallback NDVI level for season end, used if the adaptive threshold (``season_end_pct_of_peak``) never crosses |
 | ``min_season_length`` | 60 | Minimum valid season length in days |
-| ``min_ndvi_for_peak`` | None | Hard peak threshold; if None, computed adaptively |
-| ``ndvi_peak_percentile`` | 90 | Percentile used for the adaptive peak threshold |
-| ``ndvi_peak_threshold_ceiling`` | 0.7 | Upper clip applied to the adaptive peak threshold |
+| ``min_ndvi_for_peak`` | 0.4 | Minimum NDVI for a valid peak (floor against bare-soil or weed bumps) |
+| ``peak_prominence`` | 0.1 | Minimum NDVI prominence for a peak or trough; smaller wobbles neither create nor split a season |
 | ``season_start_pct_of_peak`` | 0.35 | Adaptive start threshold (fraction of peak NDVI), tried before the fixed threshold |
 | ``season_end_pct_of_peak`` | 0.35 | Adaptive end threshold (fraction of peak NDVI), tried before the fixed threshold |
 | ``season_window_days`` | 90 | Search window (days) when no bounding trough exists |
